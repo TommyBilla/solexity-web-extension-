@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Solexity - AI Assistant",
+  "version": "1.0.0",
+  "description": "Your intelligent AI assistant for browsing the web. Ask questions and get instant answers.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabs",
+    "contextMenus",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://localhost:5000/*",
+    "https://*/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Solexity AI Assistant"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ]
+}
