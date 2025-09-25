@@ -10,7 +10,7 @@
     return node;
   };
 
-  const state = { text: '', image: '', loading: false, error: '', result: '' };
+  const state = { text: '', image: '', loading: false, error: '', result: '', history: [] };
 
   const setState = (partial) => {
     Object.assign(state, partial);
@@ -84,12 +84,42 @@
     if (error) root.appendChild(error);
     if (preview) root.appendChild(preview);
     if (result) root.appendChild(result);
+
+    if (state.history && state.history.length) {
+      const list = el('div', { style: 'margin-top:10px;max-height:150px;overflow:auto;border-top:1px solid #eee;padding-top:8px;' });
+      state.history.forEach(item => {
+        const ts = new Date(item.timestamp).toLocaleString();
+        const entry = el('div', { style: 'margin-bottom:8px;font-size:11px;' }, [
+          el('div', { style: 'color:#6b7280;' }, ts),
+          el('div', { style: 'font-weight:600;margin-top:2px;' }, item.question),
+          el('div', { style: 'white-space:pre-wrap;margin-top:2px;' }, item.answer)
+        ]);
+        list.appendChild(entry);
+      });
+      root.appendChild(list);
+    }
   };
 
   // Load latest selection/screenshot stored by background
-  chrome.storage.local.get(['solexity_selectedText', 'solexity_capturedImage'], (data) => {
-    setState({ text: data.solexity_selectedText || '', image: data.solexity_capturedImage || '' });
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tabId = tabs && tabs[0] && tabs[0].id;
+    const keys = tabId != null ? [
+      `solexity_selectedText_${tabId}`,
+      `solexity_capturedImage_${tabId}`
+    ] : ['solexity_selectedText', 'solexity_capturedImage'];
+    chrome.storage.local.get(keys, (data) => {
+      setState({
+        text: data[keys[0]] || '',
+        image: data[keys[1]] || ''
+      });
+    });
   });
+
+  // Fetch history
+  fetch('http://localhost:5000/history')
+    .then(r => r.ok ? r.json() : { items: [] })
+    .then(d => setState({ history: d.items || [] }))
+    .catch(() => {});
 
   render();
 })();

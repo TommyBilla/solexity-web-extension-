@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const axios = require('axios');
 
 // Load environment variables
 dotenv.config();
@@ -104,36 +105,25 @@ const analyzeImageAI = async (base64Image, prompt) => {
   if (API_KEY) {
     try {
       const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: prompt || 'Provide a concise description of this image.' },
-                {
-                  inline_data: {
-                    mime_type: 'image/png',
-                    data: base64Image.replace(/^data:image\/[^;]+;base64,/, ''),
-                  },
+      const { data: result } = await axios.post(API_URL, {
+        contents: [
+          {
+            parts: [
+              { text: prompt || 'Provide a concise description of this image.' },
+              {
+                inline_data: {
+                  mime_type: 'image/png',
+                  data: base64Image.replace(/^data:image\/[^;]+;base64,/, ''),
                 },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.4,
-            maxOutputTokens: 512,
+              },
+            ],
           },
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.text();
-        throw new Error(`HTTP ${response.status}: ${errorData}`);
-      }
-
-      const result = await response.json();
+        ],
+        generationConfig: {
+          temperature: 0.4,
+          maxOutputTokens: 512,
+        },
+      }, { headers: { 'Content-Type': 'application/json' } });
       if (
         result.candidates &&
         result.candidates[0] &&
@@ -157,27 +147,15 @@ const analyzeImageAI = async (base64Image, prompt) => {
 // Try specific Gemini model
 const tryGeminiModel = async (question, modelName, apiKey) => {
   const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-  
-  const response = await fetch(API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: question }] }],
-      generationConfig: {
-        temperature: 0.7,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 1024,
-      }
-    }),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.text();
-    throw new Error(`HTTP ${response.status}: ${errorData}`);
-  }
-
-  const result = await response.json();
+  const { data: result } = await axios.post(API_URL, {
+    contents: [{ parts: [{ text: question }] }],
+    generationConfig: {
+      temperature: 0.7,
+      topK: 40,
+      topP: 0.95,
+      maxOutputTokens: 1024,
+    }
+  }, { headers: { 'Content-Type': 'application/json' } });
   
   if (result.candidates && result.candidates[0] && result.candidates[0].content && result.candidates[0].content.parts) {
     return result.candidates[0].content.parts[0].text;
@@ -193,22 +171,13 @@ const tryHuggingFace = async (question) => {
   }
   
   const models = ['google/flan-t5-small', 'microsoft/DialoGPT-medium', 'gpt2'];
-  
   for (const model of models) {
     try {
-      const response = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ inputs: question }),
-      });
-      
-      if (response.ok) {
-        const result = await response.json();
-        return Array.isArray(result) ? result[0].generated_text : result.generated_text;
-      }
+      const { data: result } = await axios.post(`https://api-inference.huggingface.co/models/${model}`,
+        { inputs: question },
+        { headers: { 'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`, 'Content-Type': 'application/json' } }
+      );
+      return Array.isArray(result) ? result[0].generated_text : result.generated_text;
     } catch (error) {
       continue;
     }
@@ -223,22 +192,11 @@ const tryOpenAI = async (question) => {
     throw new Error('No OpenAI API key');
   }
   
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'gpt-3.5-turbo',
-      messages: [{ role: 'user', content: question }],
-      max_tokens: 500,
-    }),
-  });
-  
-  if (!response.ok) throw new Error(`OpenAI API error: ${response.status}`);
-  
-  const result = await response.json();
+  const { data: result } = await axios.post('https://api.openai.com/v1/chat/completions', {
+    model: 'gpt-3.5-turbo',
+    messages: [{ role: 'user', content: question }],
+    max_tokens: 500,
+  }, { headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' } });
   return result.choices[0].message.content;
 };
 
@@ -361,6 +319,13 @@ app.post('/summarize', async (req, res) => {
 
     const prompt = `Summarize the following text in 3-5 bullet points, focusing on key insights and being concise.\n\nText:\n${text.trim()}`;
     const answer = await queryAI(prompt);
+    // Save
+    try {
+      const doc = new Question({ question: text.trim(), answer });
+      await doc.save();
+    } catch (e) {
+      console.warn('⚠️ Failed to save summarize history:', e.message);
+    }
     res.json({ summary: answer });
   } catch (error) {
     console.error('🔥 Error in /summarize:', error.message);
@@ -377,9 +342,28 @@ app.post('/analyze-image', async (req, res) => {
     }
 
     const description = await analyzeImageAI(imageBase64, prompt);
+    // Save
+    try {
+      const doc = new Question({ question: prompt ? `[image] ${prompt}` : '[image]', answer: description });
+      await doc.save();
+    } catch (e) {
+      console.warn('⚠️ Failed to save analyze-image history:', e.message);
+    }
     res.json({ description });
   } catch (error) {
     console.error('🔥 Error in /analyze-image:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// History (latest first)
+app.get('/history', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || '20', 10) || 20, 100);
+    const items = await Question.find({}).sort({ timestamp: -1 }).limit(limit).lean();
+    res.json({ items });
+  } catch (e) {
+    console.error('🔥 Error in /history:', e.message);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

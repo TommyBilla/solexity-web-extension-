@@ -24,3 +24,12 @@ document.addEventListener("keyup", (e) => {
     sendSelection();
   }
 });
+
+// Notify background on scroll/activity to refresh screenshot throttled from background
+let scrollTimeout;
+window.addEventListener('scroll', () => {
+  if (scrollTimeout) clearTimeout(scrollTimeout);
+  scrollTimeout = setTimeout(() => {
+    chrome.runtime.sendMessage({ action: 'pageActivity' });
+  }, 250);
+}, { passive: true });

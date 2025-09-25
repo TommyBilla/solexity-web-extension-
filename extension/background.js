@@ -1,8 +1,7 @@
 console.log("Hello from Solexity background.js");
 
 // In-memory cache as quick relay; source of truth is chrome.storage
-let latestSelectedText = '';
-let latestCapturedImage = '';
+const tabState = new Map(); // tabId -> { lastCapture: number }
 
 // Context menu setup
 chrome.runtime.onInstalled.addListener(() => {
@@ -27,16 +26,22 @@ chrome.runtime.onInstalled.addListener(() => {
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === 'solexity-summarize-selection' && info.selectionText) {
-    latestSelectedText = info.selectionText;
-    await chrome.storage.local.set({ solexity_selectedText: latestSelectedText });
+    if (tab && tab.id != null) {
+      await chrome.storage.local.set({ [`solexity_selectedText_${tab.id}`]: info.selectionText });
+    } else {
+      await chrome.storage.local.set({ solexity_selectedText: info.selectionText });
+    }
     chrome.action.openPopup && chrome.action.openPopup();
   }
 
   if (info.menuItemId === 'solexity-analyze-image') {
     try {
       const dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format: 'png' });
-      latestCapturedImage = dataUrl;
-      await chrome.storage.local.set({ solexity_capturedImage: latestCapturedImage });
+      if (tab && tab.id != null) {
+        await chrome.storage.local.set({ [`solexity_capturedImage_${tab.id}`]: dataUrl });
+      } else {
+        await chrome.storage.local.set({ solexity_capturedImage: dataUrl });
+      }
       chrome.action.openPopup && chrome.action.openPopup();
     } catch (e) {
       console.error('Failed to capture tab:', e);
@@ -46,18 +51,38 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 // Message routing between content and popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const tabId = sender?.tab?.id;
   if (message.action === 'storeSelectedText' && typeof message.text === 'string') {
-    latestSelectedText = message.text;
-    chrome.storage.local.set({ solexity_selectedText: latestSelectedText });
+    const key = tabId != null ? `solexity_selectedText_${tabId}` : 'solexity_selectedText';
+    chrome.storage.local.set({ [key]: message.text });
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (message.action === 'pageActivity') {
+    if (tabId != null) {
+      const now = Date.now();
+      const s = tabState.get(tabId) || { lastCapture: 0 };
+      if (now - s.lastCapture > 1500) {
+        s.lastCapture = now;
+        tabState.set(tabId, s);
+        chrome.tabs.captureVisibleTab(undefined, { format: 'png' })
+          .then((dataUrl) => chrome.storage.local.set({ [`solexity_capturedImage_${tabId}`]: dataUrl }))
+          .catch(() => {});
+      }
+    }
     sendResponse({ ok: true });
     return true;
   }
 
   if (message.action === 'captureScreenshot') {
     chrome.tabs.captureVisibleTab(undefined, { format: 'png' })
-      .then((dataUrl) => {
-        latestCapturedImage = dataUrl;
-        chrome.storage.local.set({ solexity_capturedImage: latestCapturedImage });
+      .then(async (dataUrl) => {
+        if (tabId != null) {
+          await chrome.storage.local.set({ [`solexity_capturedImage_${tabId}`]: dataUrl });
+        } else {
+          await chrome.storage.local.set({ solexity_capturedImage: dataUrl });
+        }
         sendResponse({ ok: true, dataUrl });
       })
       .catch((e) => {
@@ -65,4 +90,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     return true; // async
   }
+});
+
+// Refresh capture when active tab changes
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  chrome.tabs.captureVisibleTab(undefined, { format: 'png' })
+    .then((dataUrl) => chrome.storage.local.set({ [`solexity_capturedImage_${tabId}`]: dataUrl }))
+    .catch(() => {});
 });
